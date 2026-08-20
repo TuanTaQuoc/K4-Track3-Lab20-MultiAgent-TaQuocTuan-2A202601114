@@ -115,3 +115,86 @@ Mỗi nhóm trả lời 2 câu:
 
 1. Case nào nên dùng multi-agent? Vì sao?
 2. Case nào không nên dùng multi-agent? Vì sao?
+
+---
+
+### Trả lời — Tạ Quốc Tuấn (MSSV 2A202601114)
+
+Các con số dưới đây lấy từ [`reports/benchmark_report.md`](../reports/benchmark_report.md),
+chạy trên query `"Research GraphRAG state-of-the-art and write a 500-word summary"`.
+
+#### 1. Case nào nên dùng multi-agent?
+
+**a. Khi các bước cần năng lực khác nhau, không chỉ chất lượng khác nhau.**
+
+Researcher cần search tool; Analyst và Writer thì không. Baseline chạy một prompt không có
+search nên `sources=0` và **không dẫn được nguồn nào**; multi-agent lấy 5 nguồn thật,
+citation coverage 100%. Khác biệt ở đây không phải "viết hay hơn" mà là *làm được việc mà
+bên kia không làm được* — prompt engineering giỏi đến mấy cũng không tạo ra nguồn cho baseline.
+
+**b. Khi trong một prompt có hai mục tiêu xung đột.**
+
+"Viết cho thuyết phục" đấu với "trung thực về điểm yếu"; trong một prompt, mục tiêu thuyết
+phục thường thắng. Tách Analyst thành agent riêng — cấm viết kết luận, bắt buộc điền mục
+*Weak evidence* — biến sự trung thực thành output bắt buộc. Thực tế: câu trả lời multi-agent
+có mục `## Limitations` chỉ ra 4 claim thiếu dữ liệu định lượng, baseline không có.
+
+> Cần nói rõ: bằng chứng cho ý này **yếu**. `heuristic_quality_score()` cộng điểm cho chữ
+> "limitation" trong khi Writer bị prompt *bắt buộc* viết mục đó — vòng tròn logic. Cái quan
+> sát được chỉ là khác biệt định tính, n=1.
+
+**c. Khi cần cắm kiểm tra xác định vào giữa các bước.**
+
+`CriticAgent` so khớp index citation với `len(sources)` bằng regex để bắt citation trỏ tới
+nguồn không tồn tại — chi phí $0, không tự hallucinate như LLM-judge. Chỉ làm được vì có ranh
+giới rõ giữa "nguồn đã thu" và "câu trả lời đã viết"; trong single prompt không có chỗ nào để
+cắm kiểm tra đó vào.
+
+**d. Khi cần định vị lỗi.**
+
+Trace `researcher_done → analyst_done → writer_done → critic PASS` cho biết sai ở chặng nào.
+Baseline là hộp đen: sai thì chỉ biết "câu trả lời sai", không biết vì tìm sai hay viết sai.
+
+#### 2. Case nào không nên dùng multi-agent?
+
+**a. Task một bước, một năng lực.** Dịch, tóm tắt văn bản đã có sẵn, phân loại, trích xuất
+field. Không có gì để handoff; supervisor chỉ thêm một LLM call để trả lời câu hỏi mà một
+câu `if` đã trả lời được.
+
+**b. Khi latency là ràng buộc cứng.** 28.08s so với 19.31s. Với chatbot realtime thì 28s là
+hỏng sản phẩm. Tệ hơn: 4 call **tuần tự** vì mỗi bước cần output của bước trước, nên không
+rút ngắn được bằng chạy song song.
+
+**c. Khi chi phí nhân lên mà giá trị không nhân lên.** Cost cao hơn **3.44x**, với input token
+phình từ **118 → 3845** do notes bị truyền lại qua từng chặng (research_notes vào prompt
+Analyst, rồi cả hai vào prompt Writer). Với task đơn giản, đó là trả 3.4x cho cùng một kết quả.
+
+**d. Khi chưa đo được — bài học phương pháp từ chính lab này.** Chạy baseline hai lần trên
+cùng một query cho **12.24s** và **19.31s**, lệch 58%. Với n=1, câu "multi-agent chậm hơn
+1.45x" không đủ tin cậy để kết luận. Nguyên tắc: **single-agent là mặc định, multi-agent phải
+tự chứng minh bằng số.**
+
+**e. Khi lỗi cộng dồn thay vì được sửa.** 4 agent tuần tự là 4 điểm hỏng. Researcher hiểu sai
+đề → Analyst phân tích sai một cách chặt chẽ → Writer viết sai một cách trôi chảy *có kèm
+citation*. Sai lầm sớm được khuếch đại và khoác thêm vẻ đáng tin. Baseline chỉ có 1 điểm hỏng,
+và output của nó *trông* kém tin cậy hơn — đôi khi đó lại là điều tốt.
+
+> **Hạn chế thật trong implementation này:** supervisor chỉ đi tới, **không bao giờ quay lại**.
+> Không có nhánh nào bắt Researcher tìm thêm khi Analyst phát hiện bằng chứng yếu. Nghĩa là hệ
+> thống đã gánh đủ điểm hỏng của multi-agent nhưng **chưa có** cơ chế tự sửa vốn là lý do chính
+> để chịu đựng sự phức tạp đó.
+
+#### Quy tắc quyết định rút gọn
+
+```text
+Các bước có cần TOOL / năng lực khác nhau không?
+├─ Không → single-agent. Dừng.
+└─ Có → Có mục tiêu nào xung đột trong 1 prompt không?
+    ├─ Không → single-agent + tool calling. Thường là đủ.
+    └─ Có → Đã đo được multi-agent thắng chưa (n >= 3)?
+        ├─ Chưa → đo trước, đừng xây trước.
+        └─ Rồi → multi-agent, kèm guardrail 2 tầng.
+```
+
+**Một câu:** multi-agent trả bằng *latency và cost* để mua *năng lực và khả năng kiểm tra*.
+Nếu task không cần hai thứ mua được đó, ta chỉ đang trả tiền.

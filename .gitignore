@@ -9,5 +9,5 @@ dist/
 build/
 *.egg-info/
 reports/*.json
-reports/*.md
+# reports/*.md cố ý KHÔNG ignore: benchmark_report.md là deliverable phải có trong repo.
 !.gitkeep
